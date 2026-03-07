@@ -7,7 +7,6 @@ import torch
 from PIL import Image
 import logging
 import datetime
-import matplotlib.pyplot as plt
 import json
 
 from sionna.phy.fec.ldpc import LDPC5GEncoder, LDPC5GDecoder
@@ -19,18 +18,7 @@ from torchmetrics.image import (
     MultiScaleStructuralSimilarityIndexMeasure as MS_SSIM,
 )
 
-
-def snr_db_to_noise_var(snr_db, k, n, m):
-    snr_linear = 10 ** (snr_db / 10.0)
-    R = k / n
-    return 1.0 / (R * m * snr_linear)
-
-
-def compute_psnr(x, y):
-    mse = torch.mean((x - y) ** 2)
-    if mse == 0:
-        return torch.tensor(100.0)
-    return 10 * torch.log10(1.0 / mse)
+from utils import *
 
 
 def bpg_5g_ldpc_test(
@@ -64,6 +52,7 @@ def bpg_5g_ldpc_test(
     psnr_list = []
     ssim_list = []
     msssim_list = []
+    cbr_list = []
 
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
@@ -121,16 +110,17 @@ def bpg_5g_ldpc_test(
             stderr=subprocess.DEVNULL,
         )
 
-        # Load Images for Metrics
-        orig = Image.open(img_path).convert("RGB")
-        orig = torch.from_numpy(np.array(orig)).float() / 255.0
-        orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
-
         if not os.path.exists(temp_rec_png):
             psnr_list.append(0)
             ssim_list.append(0)
             msssim_list.append(0)
+            cbr_list.append(0)
             continue  # decoding failed (cliff effect)
+
+        # Load Images for Metrics
+        orig = Image.open(img_path).convert("RGB")
+        orig = torch.from_numpy(np.array(orig)).float() / 255.0
+        orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
 
         rec = Image.open(temp_rec_png).convert("RGB")
         rec = torch.from_numpy(np.array(rec)).float() / 255.0
@@ -151,10 +141,12 @@ def bpg_5g_ldpc_test(
         psnr = compute_psnr(orig, rec).item()
         ssim = ssim_metric(orig, rec).item()
         msssim = msssim_metric(orig, rec).item()
+        cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8).item()
 
         psnr_list.append(psnr)
         ssim_list.append(ssim)
         msssim_list.append(msssim)
+        cbr_list.append(cbr)
 
         # print(
         #     f"{os.path.basename(img_path)} | PSNR: {psnr:.2f} | SSIM: {ssim:.4f} | MS-SSIM: {msssim:.4f}"
@@ -169,44 +161,12 @@ def bpg_5g_ldpc_test(
     # print(f"Average SSIM: {np.mean(ssim_list):.4f}")
     # print(f"Average MS-SSIM: {np.mean(msssim_list):.4f}")
 
-    # Calculate cbr
-    cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)
-
     return (
         np.mean(psnr_list),
         np.mean(ssim_list),
         np.mean(msssim_list),
-        cbr,
+        np.mean(cbr_list),
     )
-
-
-def plot_lines(x, y, z, xlabel="x", ylabel="y", zlabel="z"):
-    """
-    x: 1D array of shape (N,)
-    y: 1D array of shape (M,)
-    z: 2D array of shape (M, N)
-       each row corresponds to one y setting
-    """
-    x = np.array(x)
-    y = np.array(y)
-    z = np.array(z)
-
-    assert z.shape == (
-        len(y),
-        len(x),
-    ), f"z shape must be ({len(y)}, {len(x)}) but got {z.shape}"
-
-    plt.figure()
-
-    for i, y_val in enumerate(y):
-        plt.plot(x, z[i], label=f"{ylabel} = {y_val}")
-
-    plt.xlabel(xlabel)
-    plt.ylabel(zlabel)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
 
 
 def bpg_5g_ldpc_test_full(
@@ -219,9 +179,7 @@ def bpg_5g_ldpc_test_full(
     out_dir="./temp",
 ):
 
-    # ----------------------------
     # Logger setup
-    # ----------------------------
     log_dir = "./logs"
     os.makedirs(log_dir, exist_ok=True)
 
@@ -248,18 +206,13 @@ def bpg_5g_ldpc_test_full(
     logger.info(f"SNR list: {snr_list}")
     logger.info(f"Q list: {q_list}")
 
-    # -------------------------------------------------
-    # 2D result containers
-    # shape = (len(q_list), len(snr_list))
-    # -------------------------------------------------
+    # 2D result containers, shape = (len(q_list), len(snr_list)
     psnr_matrix = []
     ssim_matrix = []
     msssim_matrix = []
     cbr_matrix = []
 
-    # -------------------------------------------------
     # Loop SNR and Q
-    # -------------------------------------------------
     for snr in snr_list:
         psnr_row = []
         ssim_row = []
@@ -284,9 +237,7 @@ def bpg_5g_ldpc_test_full(
         msssim_matrix.append(msssim_row)
         cbr_matrix.append(cbr_row)
 
-    # -------------------------------------------------
     # Log FULL 2D matrices
-    # -------------------------------------------------
     logger.info("===== FINAL 2D RESULTS =====")
     logger.info(f"SNR (columns): {snr_list}")
     logger.info(f"Q (rows): {q_list}")
@@ -312,15 +263,15 @@ def bpg_5g_ldpc_test_full(
 
 
 if __name__ == "__main__":
-    # bpg_5g_ldpc_test_full(
-    #     snr_list=[1, 4, 7, 10, 13],
-    #     q_list=[51, 38, 25, 13, 1],
-    #     # snr_list=[13],
-    #     # q_list=[1],
-    #     dataset="/home/matthewwang16czap/datasets/Kodak",
-    # )
-    with open("./logs/bpg.json", "r") as fp:
-        results = json.load(fp)
+    bpg_5g_ldpc_test_full(
+        snr_list=[1, 4, 7, 10, 13],
+        q_list=[51, 38, 25, 13, 1],
+        # snr_list=[13],
+        # q_list=[1],
+        dataset="/home/matthewwang16czap/datasets/Kodak",
+    )
+    # with open("./logs/bpg.json", "r") as fp:
+    #     results = json.load(fp)
     # plot_lines(
     #     results["cbr"][0],
     #     results["snr"],
@@ -329,11 +280,11 @@ if __name__ == "__main__":
     #     ylabel="SNR",
     #     zlabel="MS-SSIM",
     # )
-    plot_lines(
-        results["cbr"][0],
-        results["snr"],
-        results["psnr"],
-        xlabel="CBR",
-        ylabel="SNR",
-        zlabel="PSNR",
-    )
+    # plot_lines(
+    #     results["cbr"][0],
+    #     results["snr"],
+    #     results["psnr"],
+    #     xlabel="CBR",
+    #     ylabel="SNR",
+    #     zlabel="PSNR",
+    # )
