@@ -23,32 +23,20 @@ from utils import *
 
 def bpg_5g_ldpc_test(
     k=4096,
-    n=6144,
-    m=4,  # default 16QAM
-    q=51,  # [0,51], q higher quality lower
-    snr_db=7,
-    dataset="./Kodak",
+    m=4,
+    q=25,
+    noise_var=1e-3,
+    encoder=None,
+    decoder=None,
+    mapper=None,
+    demapper=None,
+    channel=None,
+    image_paths=None,
     out_dir="./temp",
+    ssim_metric=None,
+    msssim_metric=None,
+    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 ):
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    ssim_metric = SSIM(data_range=1.0).to(device)
-    msssim_metric = MS_SSIM(data_range=1.0).to(device)
-
-    encoder = LDPC5GEncoder(k=k, n=n, dtype=tf.float32)
-    decoder = LDPC5GDecoder(encoder, hard_out=True)
-
-    constellation = Constellation("qam", num_bits_per_symbol=m)
-    mapper = Mapper(constellation=constellation)
-    demapper = Demapper(
-        demapping_method="app", constellation=constellation, output="llr"
-    )
-    channel = AWGN()
-
-    noise_var = snr_db_to_noise_var(snr_db, k, n, m)
-    image_paths = sorted(glob.glob(os.path.join(dataset, "*")))
-
     psnr_list = []
     ssim_list = []
     msssim_list = []
@@ -171,40 +159,38 @@ def bpg_5g_ldpc_test(
 
 def bpg_5g_ldpc_test_full(
     snr_list,
-    q_list,
+    q_list,  # [0,51], q higher quality lower
     k=4096,
     n=6144,
-    m=4,
+    m=4,  # default 16QAM
     dataset="./Kodak",
     out_dir="./temp",
+    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 ):
-
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     # Logger setup
     log_dir = "./logs"
-    os.makedirs(log_dir, exist_ok=True)
-
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = os.path.join(log_dir, f"{current_time}.log")
-
-    logger = logging.getLogger("bpg_test")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-
-    formatter = logging.Formatter("%(asctime)s - INFO] %(message)s")
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(formatter)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
+    logger = setup_logger(log_dir, current_time)
     logger.info("========== Start Test ==========")
     logger.info(f"k={k}, n={n}, m={m}")
     logger.info(f"SNR list: {snr_list}")
     logger.info(f"Q list: {q_list}")
+
+    # env setup
+    ssim_metric = SSIM(data_range=1.0).to(device)
+    msssim_metric = MS_SSIM(data_range=1.0).to(device)
+
+    encoder = LDPC5GEncoder(k=k, n=n, dtype=tf.float32)
+    decoder = LDPC5GDecoder(encoder, hard_out=True)
+
+    constellation = Constellation("qam", num_bits_per_symbol=m)
+    mapper = Mapper(constellation=constellation)
+    demapper = Demapper(
+        demapping_method="app", constellation=constellation, output="llr"
+    )
+    channel = AWGN()
+
+    image_paths = sorted(glob.glob(os.path.join(dataset, "*")))
 
     # 2D result containers, shape = (len(q_list), len(snr_list)
     psnr_matrix = []
@@ -218,20 +204,27 @@ def bpg_5g_ldpc_test_full(
         ssim_row = []
         msssim_row = []
         cbr_row = []
+        noise_var = snr_db_to_noise_var(snr, k, n, m)
         for q in q_list:
             psnr, ssim, msssim, cbr = bpg_5g_ldpc_test(
                 k=k,
-                n=n,
                 m=m,
                 q=q,
-                snr_db=snr,
-                dataset=dataset,
+                noise_var=noise_var,
+                encoder=encoder,
+                decoder=decoder,
+                mapper=mapper,
+                demapper=demapper,
+                channel=channel,
+                image_paths=image_paths,
                 out_dir=out_dir,
+                ssim_metric=ssim_metric,
+                msssim_metric=msssim_metric,
             )
-            psnr_row.append(round(psnr, 3))
-            ssim_row.append(round(ssim, 4))
-            msssim_row.append(round(msssim, 4))
-            cbr_row.append(round(cbr, 4))
+            psnr_row.append(round(psnr, 3).item())
+            ssim_row.append(round(ssim, 4).item())
+            msssim_row.append(round(msssim, 4).item())
+            cbr_row.append(round(cbr, 4).item())
         psnr_matrix.append(psnr_row)
         ssim_matrix.append(ssim_row)
         msssim_matrix.append(msssim_row)

@@ -1,3 +1,6 @@
+import logging
+import os
+import datetime
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -19,6 +22,31 @@ def compute_psnr(x, y):
 def channel_capacity_awgn(snr_db):
     snr_linear = 10 ** (snr_db / 10.0)
     return np.log2(1 + snr_linear)  # bits per channel use
+
+
+def bpp_to_cbr(bpp, snr_db):
+    snr = 10 ** (snr_db / 10)
+    C = np.log2(1 + snr)
+    cbr = bpp / C
+    return cbr
+
+
+def setup_logger(log_dir="./logs", current_time=None):
+    os.makedirs(log_dir, exist_ok=True)
+    if current_time is None:
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = os.path.join(log_dir, f"{current_time}.log")
+    logger = logging.getLogger("bpg_test")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    formatter = logging.Formatter("%(asctime)s - INFO] %(message)s")
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    return logger
 
 
 def plot_lines(x, y, z, xlabel="x", ylabel="y", zlabel="z"):
