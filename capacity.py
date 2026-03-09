@@ -62,80 +62,64 @@ def compute_bpg_rd_curve(dataset, q_list, temp_dir="./temp"):
             rec_t = rec_t.permute(2, 0, 1).unsqueeze(0)
             psnr = compute_psnr(orig_t, rec_t).item()
             psnr_list.append(psnr)
-
         results.append({"q": q, "rate": np.mean(rate_list), "psnr": np.mean(psnr_list)})
-    return results
-
-
-# Compute Optimal PSNR under Capacity
-def compute_capacity_bound(rd_points, snr_list):
-    optimal_psnr = []
-    optimal_cbr = []
-
-    for snr in snr_list:
-        print(f"Processing SNR={snr} dB...")
-        C = channel_capacity_awgn(snr)
-        best_psnr = 0
-        best_cbr = None
-        for p in rd_points:
-            rate = p["rate"]
-            psnr = p["psnr"]
-            if rate <= C:
-                if psnr > best_psnr:
-                    best_psnr = psnr
-                    best_cbr = rate / C
-        optimal_psnr.append(best_psnr)
-        optimal_cbr.append(best_cbr)
 
     # Save results to JSON
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    optimal_results = {
-        "snr_list": snr_list,
-        "optimal_psnr": optimal_psnr,
-        "optimal_cbr": optimal_cbr,
-    }
-    with open(os.path.join("./logs", f"{current_time}.json"), "w") as fp:
-        json.dump(optimal_results, fp)
+    with open(os.path.join("./logs", f"capacity_rate_{current_time}.json"), "w") as fp:
+        json.dump(results, fp)
+    return results
 
-    return optimal_psnr, optimal_cbr
+
+def curve_fix_snr(rd_points, snr_db, cbr_list):
+    C = channel_capacity_awgn(snr_db)
+    psnr_curve = []
+    for cbr in cbr_list:
+        max_rate = C * cbr
+        best_psnr = 0
+        for p in rd_points:
+            bpp = p["rate"]
+            psnr = p["psnr"]
+            if bpp <= max_rate:
+                best_psnr = max(best_psnr, psnr)
+        psnr_curve.append(best_psnr)
+    return psnr_curve
+
+
+def curve_fix_cbr(rd_points, cbr, snr_list):
+    psnr_curve = []
+    for snr_db in snr_list:
+        C = channel_capacity_awgn(snr_db)
+        max_rate = C * cbr
+        best_psnr = 0
+        for p in rd_points:
+            bpp = p["rate"]
+            psnr = p["psnr"]
+            if bpp <= max_rate:
+                best_psnr = max(best_psnr, psnr)
+        psnr_curve.append(best_psnr)
+    return psnr_curve
 
 
 # Main
 if __name__ == "__main__":
-
     dataset = "/home/matthewwang16czap/datasets/Kodak"
-
     q_list = list(range(1, 52))
     snr_list = list(range(1, 50))
-
+    cbr_list = [x / 100.0 for x in range(1, 26, 2)]
     print("Computing BPG rate-distortion curve...")
-
     rd_points = compute_bpg_rd_curve(dataset, q_list)
 
-    print("Computing Shannon capacity bound...")
-
-    optimal_psnr, optimal_cbr = compute_capacity_bound(rd_points, snr_list)
-
-    # ---------------------------------------------------
-    # Plot PSNR vs SNR
-    # ---------------------------------------------------
-
-    plt.figure()
-    plt.plot(snr_list, optimal_psnr, linewidth=2)
-    plt.xlabel("SNR (dB)")
-    plt.ylabel("PSNR (dB)")
-    plt.title("Optimal BPG + Shannon Capacity Bound")
-    plt.grid(True)
+    psnr_curve = curve_fix_snr(rd_points, snr_db=10, cbr_list=cbr_list)
+    plt.plot(cbr_list, psnr_curve)
+    plt.xlabel("CBR")
+    plt.ylabel("PSNR")
+    plt.title("PSNR vs CBR (SNR fixed)")
     plt.show()
 
-    # ---------------------------------------------------
-    # Plot PSNR vs Channel Bandwidth Ratio
-    # ---------------------------------------------------
-
-    plt.figure()
-    plt.plot(optimal_cbr, optimal_psnr, linewidth=2)
-    plt.xlabel("Channel Bandwidth Ratio (CBR)")
-    plt.ylabel("PSNR (dB)")
-    plt.title("PSNR vs Channel Bandwidth Ratio")
-    plt.grid(True)
+    psnr_curve = curve_fix_cbr(rd_points, cbr=0.125, snr_list=snr_list)
+    plt.plot(snr_list, psnr_curve)
+    plt.xlabel("SNR (dB)")
+    plt.ylabel("PSNR")
+    plt.title("PSNR vs SNR (CBR fixed)")
     plt.show()
