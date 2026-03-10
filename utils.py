@@ -7,9 +7,11 @@ import matplotlib.pyplot as plt
 
 
 def snr_db_to_noise_var(snr_db, k, n, m):
-    snr_linear = 10 ** (snr_db / 10.0)
     R = k / n
-    return 1.0 / (R * m * snr_linear)
+    snr = 10 ** (snr_db / 10)
+    EsN0 = snr * m * R
+    noise_var = 1 / (2 * EsN0)
+    return noise_var
 
 
 def compute_psnr(x, y):

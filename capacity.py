@@ -105,21 +105,29 @@ def curve_fix_cbr(rd_points, cbr, snr_list):
 if __name__ == "__main__":
     dataset = "/home/matthewwang16czap/datasets/Kodak"
     q_list = list(range(1, 52))
-    snr_list = list(range(1, 50))
+    snr_list = list(range(1, 40))
     cbr_list = [x / 100.0 for x in range(1, 26, 2)]
-    print("Computing BPG rate-distortion curve...")
-    rd_points = compute_bpg_rd_curve(dataset, q_list)
 
-    psnr_curve = curve_fix_snr(rd_points, snr_db=10, cbr_list=cbr_list)
-    plt.plot(cbr_list, psnr_curve)
-    plt.xlabel("CBR")
-    plt.ylabel("PSNR")
-    plt.title("PSNR vs CBR (SNR fixed)")
-    plt.show()
+    # print("Computing BPG rate-distortion curve...")
+    # rd_points = compute_bpg_rd_curve(dataset, q_list)
 
-    psnr_curve = curve_fix_cbr(rd_points, cbr=0.125, snr_list=snr_list)
+    with open(os.path.join("./logs", f"capacity_rate.json"), "r") as fp:
+        rd_points = json.load(fp)
+
+    # snr_db = 7
+    # psnr_curve = curve_fix_snr(rd_points, snr_db=snr_db, cbr_list=cbr_list)
+    # plt.plot(cbr_list, psnr_curve)
+    # plt.xlabel("CBR")
+    # plt.ylabel("PSNR")
+    # plt.title("PSNR vs CBR (SNR fixed)")
+    # plt.savefig(f"./plots/psnr_vs_cbr_fixed_snr{snr_db}.png")
+    # # plt.show()
+
+    cbr = 0.0625
+    psnr_curve = curve_fix_cbr(rd_points, cbr=cbr, snr_list=snr_list)
     plt.plot(snr_list, psnr_curve)
     plt.xlabel("SNR (dB)")
     plt.ylabel("PSNR")
     plt.title("PSNR vs SNR (CBR fixed)")
-    plt.show()
+    plt.savefig(f"./plots/psnr_vs_snr_fixed_cbr{cbr}.png")
+    # plt.show()
