@@ -7,6 +7,8 @@ import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import json
+import pandas as pd
+from scipy.interpolate import PchipInterpolator
 
 from sionna.phy.fec.ldpc import LDPC5GEncoder, LDPC5GDecoder
 from sionna.phy.mapping import Mapper, Demapper, Constellation
@@ -126,10 +128,15 @@ def run_experiment(dataset, q_list, snr_list, temp_dir):
                         channel,
                         noise_var,
                     )
+                    cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)
                     if decoded is None:
+                        psnr_list.append(0)
+                        cbr_list.append(cbr)
                         continue
                     rec_path = decode_bpg(decoded, temp_dir)
                     if rec_path is None:
+                        psnr_list.append(0)
+                        cbr_list.append(cbr)
                         continue
 
                     orig = Image.open(img_path).convert("RGB")
@@ -139,16 +146,14 @@ def run_experiment(dataset, q_list, snr_list, temp_dir):
                     orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
                     rec = rec.permute(2, 0, 1).unsqueeze(0).to(device)
                     if orig.shape != rec.shape:
+                        psnr_list.append(0)
+                        cbr_list.append(cbr)
                         continue
 
                     psnr = compute_psnr(orig, rec).item()
-                    cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)
 
                     psnr_list.append(psnr)
                     cbr_list.append(cbr)
-
-                if len(psnr_list) == 0:
-                    continue
 
                 results.append(
                     {
@@ -165,56 +170,113 @@ def run_experiment(dataset, q_list, snr_list, temp_dir):
     return results
 
 
-# Envelope
-def compute_envelope(points):
-    points = sorted(points, key=lambda x: x[0])
-    env_cbr = []
-    env_psnr = []
-    best = -1
-    for cbr, psnr in points:
-        if psnr > best:
-            env_cbr.append(cbr)
-            env_psnr.append(psnr)
-            best = psnr
-    return env_cbr, env_psnr
+def preprocess_experiment_data(data_list):
+    """
+    Cleans data by choosing the highest PSNR for duplicate (SNR, CBR) pairs
+    and removing suboptimal points (Pareto front) for each SNR.
+    """
+    df = pd.DataFrame(data_list)
+
+    # Round CBR first so that near-identical values are merged in groupby
+    df["cbr"] = df["cbr"].round(3)
+
+    # 1. Take highest PSNR for same SNR and CBR
+    df = df.groupby(["snr", "cbr"]).psnr.max().reset_index()
+
+    # 2. Filter for optimal points (Pareto front: PSNR must increase with CBR)
+    processed_dfs = []
+    for snr, group in df.groupby("snr"):
+        group = group.sort_values("cbr")
+        optimal_points = []
+        max_psnr_so_far = -float("inf")
+        for _, row in group.iterrows():
+            if row["psnr"] > max_psnr_so_far:
+                optimal_points.append(row)
+                max_psnr_so_far = row["psnr"]
+        processed_dfs.append(pd.DataFrame(optimal_points))
+
+    return pd.concat(processed_dfs).reset_index(drop=True)
 
 
-def extract_curves(results, snr_list):
-    curves = {}
+def plot_psnr_vs_cbr(df, snr_list):
+    plt.figure(figsize=(10, 6))
+
     for snr in snr_list:
-        pts = [(r["cbr"], r["psnr"]) for r in results if r["snr"] == snr]
-        curves[snr] = compute_envelope(pts)
-    return curves
+        subset = df[df["snr"] == snr].sort_values("cbr")
+        if subset.empty:
+            continue
 
+        x, y = subset["cbr"].values, subset["psnr"].values
 
-# Plot
-def plot_ldpc(curves):
-    markers = {0: "*", 4: "o", 10: "v"}
-    for snr, (cbr, psnr) in curves.items():
-        plt.step(
-            cbr,
-            psnr,
-            where="post",
-            linestyle="--",
-            color="black",
-            marker=markers.get(snr, "o"),
-            label=f"SNR={snr}dB",
-        )
+        if len(x) >= 3:
+            # PchipInterpolator prevents "wavy" oscillations
+            x_smooth = np.linspace(x.min(), x.max(), 500)
+            interp = PchipInterpolator(x, y)
+            y_smooth = interp(x_smooth)
+            plt.plot(x_smooth, y_smooth, label=f"SNR {snr} dB", linewidth=2)
+        else:
+            # Fallback to straight line if too few points
+            plt.plot(x, y, "o-", label=f"SNR {snr} dB")
 
-    plt.xlabel("Channel Bandwidth Ratio")
+        plt.scatter(x, y, s=40, alpha=0.5)
+
+    plt.xlabel("CBR (3-decimal rounded)")
     plt.ylabel("PSNR (dB)")
-    plt.grid(True)
+    plt.title("PSNR vs CBR (Monotonic Smooth Curve)")
     plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+
+def plot_psnr_vs_snr(df, cbr_list, tolerance=0.01):
+    """
+    Plots a line chart of PSNR vs SNR for specific CBR settings.
+    Since CBR is often discrete, it finds the closest available CBR within a tolerance.
+    """
+    plt.figure(figsize=(10, 6), dpi=100)
+    available_cbrs = df["cbr"].unique()
+
+    for target_cbr in cbr_list:
+        # Find the unique CBR in the data closest to the user's request
+        closest_cbr = available_cbrs[np.argmin(np.abs(available_cbrs - target_cbr))]
+
+        if abs(closest_cbr - target_cbr) > tolerance:
+            print(f"Skipping CBR {target_cbr}: No match found within tolerance.")
+            continue
+
+        subset = df[df["cbr"] == closest_cbr].sort_values("snr")
+        plt.plot(subset["snr"], subset["psnr"], "o-", label=f"CBR ≈ {closest_cbr:.4f}")
+
+    plt.xlabel("SNR (dB)")
+    plt.ylabel("PSNR (dB)")
+    plt.title("PSNR vs SNR Performance")
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.7)
     plt.show()
 
 
 # Main
 if __name__ == "__main__":
     dataset = "/home/matthewwang16czap/datasets/Kodak"
-    q_list = [51, 38, 25, 13, 1]
-    snr_list = [1, 4, 7, 10, 13]
+    q_list = list(range(1, 52))
+    snr_list = list(range(1, 14))
 
     temp_dir = "./temp"
     results = run_experiment(dataset, q_list, snr_list, temp_dir)
-    curves = extract_curves(results, snr_list)
-    plot_ldpc(curves)
+
+    # with open(os.path.join("./logs", f"ldpc.json"), "r") as fp:
+    #     results = json.load(fp)
+
+    # # 1. Preprocess as usual (rounding to 3 decimals and Pareto front)
+    # results = preprocess_experiment_data(results)
+
+    # # 2. Define your specific CBR threshold (your exact code)
+    # unique_cbrs = results["cbr"].unique()
+    # selected_cbrs = sorted(unique_cbrs[unique_cbrs < 0.125])
+
+    # # 3. Filter the DataFrame to only include these CBRs
+    # filtered_results = results[results["cbr"].isin(selected_cbrs)]
+
+    # plot_psnr_vs_cbr(filtered_results, [1, 4, 7, 10, 13])
+
+    # plot_psnr_vs_snr(filtered_results, selected_cbrs)
