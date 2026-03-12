@@ -129,7 +129,7 @@ def bpg_5g_ldpc_test(
         psnr = compute_psnr(orig, rec).item()
         ssim = ssim_metric(orig, rec).item()
         msssim = msssim_metric(orig, rec).item()
-        cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8).item()
+        cbr = ((np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)).item()
 
         psnr_list.append(psnr)
         ssim_list.append(ssim)

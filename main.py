@@ -128,22 +128,28 @@ def run_experiment(dataset, q_list, snr_list, temp_dir):
                         channel,
                         noise_var,
                     )
-                    cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)
+
+                    # original image process
+                    orig = Image.open(img_path).convert("RGB")
+                    orig = torch.from_numpy(np.array(orig)).float() / 255
+                    orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
+
+                    # cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)
+                    cbr = (np.prod(bitstream.shape) / m) / (
+                        orig.shape[-1] * orig.shape[-2]
+                    )
                     if decoded is None:
                         psnr_list.append(0)
                         cbr_list.append(cbr)
                         continue
+
                     rec_path = decode_bpg(decoded, temp_dir)
                     if rec_path is None:
                         psnr_list.append(0)
                         cbr_list.append(cbr)
                         continue
-
-                    orig = Image.open(img_path).convert("RGB")
                     rec = Image.open(rec_path).convert("RGB")
-                    orig = torch.from_numpy(np.array(orig)).float() / 255
                     rec = torch.from_numpy(np.array(rec)).float() / 255
-                    orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
                     rec = rec.permute(2, 0, 1).unsqueeze(0).to(device)
                     if orig.shape != rec.shape:
                         psnr_list.append(0)
@@ -151,7 +157,6 @@ def run_experiment(dataset, q_list, snr_list, temp_dir):
                         continue
 
                     psnr = compute_psnr(orig, rec).item()
-
                     psnr_list.append(psnr)
                     cbr_list.append(cbr)
 
@@ -258,8 +263,10 @@ def plot_psnr_vs_snr(df, cbr_list, tolerance=0.01):
 # Main
 if __name__ == "__main__":
     dataset = "/home/matthewwang16czap/datasets/Kodak"
-    q_list = list(range(1, 52))
-    snr_list = list(range(1, 14))
+    # q_list = list(range(1, 52))
+    # snr_list = list(range(1, 14))
+    q_list = [51, 40, 30]
+    snr_list = [1, 4, 7]
 
     temp_dir = "./temp"
     results = run_experiment(dataset, q_list, snr_list, temp_dir)
@@ -267,16 +274,16 @@ if __name__ == "__main__":
     # with open(os.path.join("./logs", f"ldpc.json"), "r") as fp:
     #     results = json.load(fp)
 
-    # # 1. Preprocess as usual (rounding to 3 decimals and Pareto front)
-    # results = preprocess_experiment_data(results)
+    # 1. Preprocess as usual (rounding to 3 decimals and Pareto front)
+    results = preprocess_experiment_data(results)
 
-    # # 2. Define your specific CBR threshold (your exact code)
-    # unique_cbrs = results["cbr"].unique()
-    # selected_cbrs = sorted(unique_cbrs[unique_cbrs < 0.125])
+    # 2. Define your specific CBR threshold (your exact code)
+    unique_cbrs = results["cbr"].unique()
+    selected_cbrs = sorted(unique_cbrs[unique_cbrs < 0.125])
 
-    # # 3. Filter the DataFrame to only include these CBRs
-    # filtered_results = results[results["cbr"].isin(selected_cbrs)]
+    # 3. Filter the DataFrame to only include these CBRs
+    filtered_results = results[results["cbr"].isin(selected_cbrs)]
 
-    # plot_psnr_vs_cbr(filtered_results, [1, 4, 7, 10, 13])
+    plot_psnr_vs_cbr(filtered_results, [1, 4, 7, 10, 13])
 
-    # plot_psnr_vs_snr(filtered_results, selected_cbrs)
+    plot_psnr_vs_snr(filtered_results, selected_cbrs)
