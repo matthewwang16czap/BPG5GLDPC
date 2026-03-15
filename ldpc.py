@@ -5,9 +5,10 @@ import numpy as np
 import tensorflow as tf
 import torch
 from PIL import Image
-import logging
-import datetime
+import matplotlib.pyplot as plt
 import json
+import pandas as pd
+from scipy.interpolate import PchipInterpolator
 
 from sionna.phy.fec.ldpc import LDPC5GEncoder, LDPC5GDecoder
 from sionna.phy.mapping import Mapper, Demapper, Constellation
@@ -17,267 +18,272 @@ from torchmetrics.image import (
     StructuralSimilarityIndexMeasure as SSIM,
     MultiScaleStructuralSimilarityIndexMeasure as MS_SSIM,
 )
-
 from utils import *
 
 
-def bpg_5g_ldpc_test(
-    k=4096,
-    m=4,
-    q=25,
-    noise_var=1e-3,
-    encoder=None,
-    decoder=None,
-    mapper=None,
-    demapper=None,
-    channel=None,
-    image_paths=None,
-    out_dir="./temp",
-    ssim_metric=None,
-    msssim_metric=None,
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+# AMC configurations
+AMC_CONFIGS = [
+    {"m": 2, "k": 2048, "n": 6144},  # QPSK 1/3
+    {"m": 2, "k": 3072, "n": 6144},  # QPSK 1/2
+    {"m": 4, "k": 3072, "n": 6144},  # 16QAM 1/2
+    {"m": 4, "k": 4096, "n": 6144},  # 16QAM 2/3
+    {"m": 6, "k": 4096, "n": 6144},  # 64QAM 2/3
+    {"m": 6, "k": 4608, "n": 6144},  # 64QAM 3/4
+]
+
+
+# BPG encode once
+def encode_bpg_once(image_paths, q_list, temp_dir):
+    encoded = {}
+    os.makedirs(temp_dir, exist_ok=True)
+
+    for q in q_list:
+        encoded[q] = []
+        for img_path in image_paths:
+            temp_bpg = os.path.join(temp_dir, f"temp.bpg")
+            subprocess.run(
+                ["bpgenc", "-q", str(q), img_path, "-o", temp_bpg],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            with open(temp_bpg, "rb") as f:
+                file_bytes = f.read()
+            bitstream = np.unpackbits(np.frombuffer(file_bytes, dtype=np.uint8))
+            encoded[q].append(bitstream)
+    return encoded
+
+
+# Transmission simulation
+def transmit_bitstream(
+    bitstream, k, encoder, decoder, mapper, demapper, channel, noise_var
 ):
-    psnr_list = []
-    ssim_list = []
-    msssim_list = []
-    cbr_list = []
+    num_blocks = len(bitstream) // k
+    if num_blocks == 0:
+        return None, None
+    bits = bitstream[: num_blocks * k].reshape(num_blocks, k)
+    bits = tf.cast(bits, tf.float32)
+    coded = encoder(bits)
+    symbols = mapper(coded)
+    rx = channel(symbols, noise_var)
+    llr = demapper(rx, noise_var)
+    decoded = decoder(llr)
+    decoded = tf.cast(decoded, tf.uint8).numpy().reshape(-1)
+    return decoded, symbols
 
-    if not os.path.exists(out_dir):
-        os.mkdir(out_dir)
 
-    for img_path in image_paths:
-        # Remove temp files
-        temp_bpg = os.path.join(out_dir, "temp.bpg")
-        temp_rec_bpg = os.path.join(out_dir, "temp_rec.bpg")
-        temp_rec_png = os.path.join(out_dir, "temp_rec.png")
-        for f in [temp_bpg, temp_rec_bpg, temp_rec_png]:
-            if os.path.exists(f):
-                os.remove(f)
-
-        # BPG Encode
-        subprocess.run(
-            ["bpgenc", "-q", str(q), img_path, "-o", temp_bpg],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        with open(temp_bpg, "rb") as f:
-            file_bytes = f.read()
-
-        # Bytes → Bits
-        bitstream = np.unpackbits(np.frombuffer(file_bytes, dtype=np.uint8))
-        total_bits = len(bitstream)
-        num_blocks = total_bits // k
-        if num_blocks == 0:
-            continue
-        bitstream = bitstream[: num_blocks * k]
-        bitstream = bitstream.reshape(num_blocks, k)
-        bits = tf.cast(bitstream, dtype=tf.float32)
-
-        # LDPC Encode
-        coded = encoder(bits)
-
-        # QAM
-        symbols = mapper(coded)
-
-        # AWGN
-        rx = channel(symbols, noise_var)
-
-        # Demap + Decode
-        llr = demapper(rx, noise_var)
-        decoded_bits = decoder(llr)
-        decoded_bits = tf.cast(decoded_bits, tf.uint8)
-        decoded_bits = decoded_bits.numpy().reshape(-1)
-
-        # Bits → Bytes → BPG Decode
-        decoded_bytes = np.packbits(decoded_bits)
-        with open(temp_rec_bpg, "wb") as f:
-            f.write(decoded_bytes)
-        subprocess.run(
-            ["bpgdec", temp_rec_bpg, "-o", temp_rec_png],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        if not os.path.exists(temp_rec_png):
-            psnr_list.append(0)
-            ssim_list.append(0)
-            msssim_list.append(0)
-            cbr_list.append(0)
-            continue  # decoding failed (cliff effect)
-
-        # Load Images for Metrics
-        orig = Image.open(img_path).convert("RGB")
-        orig = torch.from_numpy(np.array(orig)).float() / 255.0
-        orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
-
-        rec = Image.open(temp_rec_png).convert("RGB")
-        rec = torch.from_numpy(np.array(rec)).float() / 255.0
-        rec = rec.permute(2, 0, 1).unsqueeze(0).to(device)
-
-        # Mismatch Check: If H and W are swapped (Common at low SNR/Kodak)
-        if orig.shape != rec.shape:
-            # Check if transposing fixes it
-            if orig.shape[2] == rec.shape[3] and orig.shape[3] == rec.shape[2]:
-                rec = rec.transpose(2, 3)
-            else:
-                # If still not matching (e.g. wrong crop), resize rec to match orig
-                rec = torch.nn.functional.interpolate(
-                    rec, size=orig.shape[2:], mode="bilinear", align_corners=False
-                )
-
-        # Metrics
-        psnr = compute_psnr(orig, rec).item()
-        ssim = ssim_metric(orig, rec).item()
-        msssim = msssim_metric(orig, rec).item()
-        cbr = ((np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)).item()
-
-        psnr_list.append(psnr)
-        ssim_list.append(ssim)
-        msssim_list.append(msssim)
-        cbr_list.append(cbr)
-
-        # print(
-        #     f"{os.path.basename(img_path)} | PSNR: {psnr:.2f} | SSIM: {ssim:.4f} | MS-SSIM: {msssim:.4f}"
-        # )
-        # errors = np.sum(bitstream != decoded_bits.reshape(num_blocks, k))
-        # ber = errors / bitstream.size
-        # print(f"Bit Error Rate (BER): {ber:.6f}")
-
-    # Final Results
-    # print("\n====== Final Results ======")
-    # print(f"Average PSNR: {np.mean(psnr_list):.4f}")
-    # print(f"Average SSIM: {np.mean(ssim_list):.4f}")
-    # print(f"Average MS-SSIM: {np.mean(msssim_list):.4f}")
-
-    return (
-        np.mean(psnr_list),
-        np.mean(ssim_list),
-        np.mean(msssim_list),
-        np.mean(cbr_list),
+# Decode BPG
+def decode_bpg(bits, temp_dir):
+    rec_bpg = os.path.join(temp_dir, "rec.bpg")
+    rec_png = os.path.join(temp_dir, "rec.png")
+    decoded_bytes = np.packbits(bits)
+    with open(rec_bpg, "wb") as f:
+        f.write(decoded_bytes)
+    subprocess.run(
+        ["bpgdec", rec_bpg, "-o", rec_png],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
+    if not os.path.exists(rec_png):
+        return None
+    return rec_png
 
 
-def bpg_5g_ldpc_test_full(
-    snr_list,
-    q_list,  # [0,51], q higher quality lower
-    k=4096,
-    n=6144,
-    m=4,  # default 16QAM
-    dataset="./Kodak",
-    out_dir="./temp",
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-):
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    # Logger setup
-    log_dir = "./logs"
-    logger = setup_logger(log_dir, current_time)
-    logger.info("========== Start Test ==========")
-    logger.info(f"k={k}, n={n}, m={m}")
-    logger.info(f"SNR list: {snr_list}")
-    logger.info(f"Q list: {q_list}")
-
-    # env setup
+# Main experiment
+def run_experiment(dataset, q_list, snr_list, temp_dir):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ssim_metric = SSIM(data_range=1.0).to(device)
     msssim_metric = MS_SSIM(data_range=1.0).to(device)
-
-    encoder = LDPC5GEncoder(k=k, n=n, dtype=tf.float32)
-    decoder = LDPC5GDecoder(encoder, hard_out=True)
-
-    constellation = Constellation("qam", num_bits_per_symbol=m)
-    mapper = Mapper(constellation=constellation)
-    demapper = Demapper(
-        demapping_method="app", constellation=constellation, output="llr"
-    )
     channel = AWGN()
-
     image_paths = sorted(glob.glob(os.path.join(dataset, "*")))
+    encoded = encode_bpg_once(image_paths, q_list, temp_dir)
+    results = []
 
-    # 2D result containers, shape = (len(q_list), len(snr_list)
-    psnr_matrix = []
-    ssim_matrix = []
-    msssim_matrix = []
-    cbr_matrix = []
+    for cfg in AMC_CONFIGS:
+        m = cfg["m"]
+        k = cfg["k"]
+        n = cfg["n"]
 
-    # Loop SNR and Q
-    for snr in snr_list:
-        psnr_row = []
-        ssim_row = []
-        msssim_row = []
-        cbr_row = []
-        noise_var = snr_db_to_noise_var(snr, k, n, m)
-        for q in q_list:
-            psnr, ssim, msssim, cbr = bpg_5g_ldpc_test(
-                k=k,
-                m=m,
-                q=q,
-                noise_var=noise_var,
-                encoder=encoder,
-                decoder=decoder,
-                mapper=mapper,
-                demapper=demapper,
-                channel=channel,
-                image_paths=image_paths,
-                out_dir=out_dir,
-                ssim_metric=ssim_metric,
-                msssim_metric=msssim_metric,
-            )
-            psnr_row.append(round(psnr, 3).item())
-            ssim_row.append(round(ssim, 4).item())
-            msssim_row.append(round(msssim, 4).item())
-            cbr_row.append(round(cbr, 4).item())
-        psnr_matrix.append(psnr_row)
-        ssim_matrix.append(ssim_row)
-        msssim_matrix.append(msssim_row)
-        cbr_matrix.append(cbr_row)
+        constellation = Constellation("qam", num_bits_per_symbol=m)
+        mapper = Mapper(constellation=constellation)
+        demapper = Demapper(
+            demapping_method="app", constellation=constellation, output="llr"
+        )
+        encoder = LDPC5GEncoder(k=k, n=n, dtype=tf.float32)
+        decoder = LDPC5GDecoder(encoder, hard_out=True)
 
-    # Log FULL 2D matrices
-    logger.info("===== FINAL 2D RESULTS =====")
-    logger.info(f"SNR (columns): {snr_list}")
-    logger.info(f"Q (rows): {q_list}")
-    logger.info(f"PSNR Matrix:\n{psnr_matrix}")
-    logger.info(f"SSIM Matrix:\n{ssim_matrix}")
-    logger.info(f"MS-SSIM Matrix:\n{msssim_matrix}")
-    logger.info(f"CBR Matrix:\n{cbr_matrix}")
-    logger.info("========== Finish Test ==========")
+        for snr in snr_list:
+            noise_var = snr_db_to_noise_var(snr, k, n, m)
+            for q in q_list:
+                psnr_list = []
+                cbr_list = []
+                for img_idx, img_path in enumerate(image_paths):
+                    bitstream = encoded[q][img_idx]
+                    decoded, symbols = transmit_bitstream(
+                        bitstream,
+                        k,
+                        encoder,
+                        decoder,
+                        mapper,
+                        demapper,
+                        channel,
+                        noise_var,
+                    )
 
-    results = {
-        "snr": snr_list,
-        "q": q_list,
-        "psnr": psnr_matrix,
-        "ssim": ssim_matrix,
-        "msssim": msssim_matrix,
-        "cbr": cbr_matrix,
-    }
+                    # original image process
+                    orig = Image.open(img_path).convert("RGB")
+                    orig = torch.from_numpy(np.array(orig)).float() / 255
+                    orig = orig.permute(2, 0, 1).unsqueeze(0).to(device)
 
-    with open(os.path.join(log_dir, f"{current_time}.json"), "w") as fp:
+                    # cbr = (np.prod(symbols.shape) * m) / (np.prod(orig.shape) * 8)
+                    cbr = (np.prod(bitstream.shape) / m) / (
+                        orig.shape[-1] * orig.shape[-2]
+                    )
+                    if decoded is None:
+                        psnr_list.append(0)
+                        cbr_list.append(cbr)
+                        continue
+
+                    rec_path = decode_bpg(decoded, temp_dir)
+                    if rec_path is None:
+                        psnr_list.append(0)
+                        cbr_list.append(cbr)
+                        continue
+                    rec = Image.open(rec_path).convert("RGB")
+                    rec = torch.from_numpy(np.array(rec)).float() / 255
+                    rec = rec.permute(2, 0, 1).unsqueeze(0).to(device)
+                    if orig.shape != rec.shape:
+                        psnr_list.append(0)
+                        cbr_list.append(cbr)
+                        continue
+
+                    psnr = compute_psnr(orig, rec).item()
+                    psnr_list.append(psnr)
+                    cbr_list.append(cbr)
+
+                results.append(
+                    {
+                        "snr": snr,
+                        "q": q,
+                        "psnr": np.mean(psnr_list),
+                        "cbr": np.mean(cbr_list),
+                        "config": cfg,
+                    }
+                )
+
+    with open(os.path.join("./logs", f"ldpc.json"), "w") as fp:
         json.dump(results, fp)
-
     return results
 
 
+def preprocess_experiment_data(data_list):
+    """
+    Cleans data by choosing the highest PSNR for duplicate (SNR, CBR) pairs
+    and removing suboptimal points (Pareto front) for each SNR.
+    """
+    df = pd.DataFrame(data_list)
+
+    # Round CBR first so that near-identical values are merged in groupby
+    df["cbr"] = df["cbr"].round(3)
+
+    # 1. Take highest PSNR for same SNR and CBR
+    df = df.groupby(["snr", "cbr"]).psnr.max().reset_index()
+
+    # 2. Filter for optimal points (Pareto front: PSNR must increase with CBR)
+    processed_dfs = []
+    for snr, group in df.groupby("snr"):
+        group = group.sort_values("cbr")
+        optimal_points = []
+        max_psnr_so_far = -float("inf")
+        for _, row in group.iterrows():
+            if row["psnr"] > max_psnr_so_far:
+                optimal_points.append(row)
+                max_psnr_so_far = row["psnr"]
+        processed_dfs.append(pd.DataFrame(optimal_points))
+
+    return pd.concat(processed_dfs).reset_index(drop=True)
+
+
+def plot_psnr_vs_cbr(df, snr_list):
+    plt.figure(figsize=(10, 6))
+
+    for snr in snr_list:
+        subset = df[df["snr"] == snr].sort_values("cbr")
+        if subset.empty:
+            continue
+
+        x, y = subset["cbr"].values, subset["psnr"].values
+
+        if len(x) >= 3:
+            # PchipInterpolator prevents "wavy" oscillations
+            x_smooth = np.linspace(x.min(), x.max(), 500)
+            interp = PchipInterpolator(x, y)
+            y_smooth = interp(x_smooth)
+            plt.plot(x_smooth, y_smooth, label=f"SNR {snr} dB", linewidth=2)
+        else:
+            # Fallback to straight line if too few points
+            plt.plot(x, y, "o-", label=f"SNR {snr} dB")
+
+        plt.scatter(x, y, s=40, alpha=0.5)
+
+    plt.xlabel("CBR (3-decimal rounded)")
+    plt.ylabel("PSNR (dB)")
+    plt.title("PSNR vs CBR (Monotonic Smooth Curve)")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+
+def plot_psnr_vs_snr(df, cbr_list, tolerance=0.01):
+    """
+    Plots a line chart of PSNR vs SNR for specific CBR settings.
+    Since CBR is often discrete, it finds the closest available CBR within a tolerance.
+    """
+    plt.figure(figsize=(10, 6), dpi=100)
+    available_cbrs = df["cbr"].unique()
+
+    for target_cbr in cbr_list:
+        # Find the unique CBR in the data closest to the user's request
+        closest_cbr = available_cbrs[np.argmin(np.abs(available_cbrs - target_cbr))]
+
+        if abs(closest_cbr - target_cbr) > tolerance:
+            print(f"Skipping CBR {target_cbr}: No match found within tolerance.")
+            continue
+
+        subset = df[df["cbr"] == closest_cbr].sort_values("snr")
+        plt.plot(subset["snr"], subset["psnr"], "o-", label=f"CBR ≈ {closest_cbr:.4f}")
+
+    plt.xlabel("SNR (dB)")
+    plt.ylabel("PSNR (dB)")
+    plt.title("PSNR vs SNR Performance")
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.show()
+
+
+# Main
 if __name__ == "__main__":
-    bpg_5g_ldpc_test_full(
-        snr_list=[1, 4, 7, 10, 13],
-        q_list=[51, 38, 25, 13, 1],
-        # snr_list=[13],
-        # q_list=[1],
-        dataset="/home/matthewwang16czap/datasets/Kodak",
-    )
-    # with open("./logs/bpg.json", "r") as fp:
+    dataset = "/home/matthewwang16czap/datasets/Kodak"
+    # q_list = list(range(1, 52))
+    # snr_list = list(range(1, 14))
+    q_list = [51, 45, 40, 35, 30]
+    snr_list = [1, 4, 7, 10, 13]
+
+    temp_dir = "./temp"
+    results = run_experiment(dataset, q_list, snr_list, temp_dir)
+
+    # with open(os.path.join("./logs", f"ldpc.json"), "r") as fp:
     #     results = json.load(fp)
-    # plot_lines(
-    #     results["cbr"][0],
-    #     results["snr"],
-    #     results["msssim"],
-    #     xlabel="CBR",
-    #     ylabel="SNR",
-    #     zlabel="MS-SSIM",
-    # )
-    # plot_lines(
-    #     results["cbr"][0],
-    #     results["snr"],
-    #     results["psnr"],
-    #     xlabel="CBR",
-    #     ylabel="SNR",
-    #     zlabel="PSNR",
-    # )
+
+    # 1. Preprocess as usual (rounding to 3 decimals and Pareto front)
+    results = preprocess_experiment_data(results)
+
+    # 2. Define your specific CBR threshold (your exact code)
+    unique_cbrs = results["cbr"].unique()
+    selected_cbrs = sorted(unique_cbrs[unique_cbrs < 0.125])
+
+    # 3. Filter the DataFrame to only include these CBRs
+    filtered_results = results[results["cbr"].isin(selected_cbrs)]
+
+    plot_psnr_vs_cbr(filtered_results, [1, 4, 7, 10, 13])
+
+    plot_psnr_vs_snr(filtered_results, selected_cbrs)
