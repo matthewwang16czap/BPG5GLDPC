@@ -1,4 +1,4 @@
-BPG + capacity is working on.
+Sionna 2.0 has support pytorch, will build a sionna2.0 ver system soon.
 
 ## Prerequisites
 
