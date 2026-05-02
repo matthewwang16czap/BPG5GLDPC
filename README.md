@@ -2,11 +2,50 @@ Sionna 2.0 has support pytorch, will build a sionna2.0 ver system soon.
 
 ## Prerequisites
 
-pip: numpy, sionna, torch, torchmetrics
+### `pip`
 
-linux package: libbpg
+```bash
+pip install -r requirements.txt
+```
 
-notes: if you encounter build issues for libbpg try to run "sudo apt-get remove libnuma-dev" then run "sudo make & sudo make install"
+### `libbpg`
+
+Install all required system packages:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake yasm libpng-dev libjpeg-dev libsdl1.2-dev
+```
+
+Clone and build the library:
+
+```bash
+git clone https://github.com/mirrorer/libbpg.git
+cd libbpg
+
+make clean
+make -j$(nproc)
+```
+
+To install system-wide:
+
+```bash
+sudo make install
+```
+
+If you encounter build issues related to NUMA or system libraries, try:
+
+```bash
+sudo apt-get remove libnuma-dev
+```
+
+Then rebuild:
+
+```bash
+make clean
+make -j$(nproc)
+sudo make install
+```
 
 ## Related links
 

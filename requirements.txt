@@ -1,0 +1,16 @@
+# Core
+torch>2.9
+torchvision>0.15
+timm>0.9
+torchmetrics>1.0
+lpips
+
+# Channel
+sionna>2.0
+
+# Image / CV
+opencv-python>4.8
+pillow
+
+# Dataset
+fiftyone
