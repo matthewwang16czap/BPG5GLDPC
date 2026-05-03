@@ -1,8 +1,8 @@
 import os
 import torch
 import json
-from utils import *
-from datasets_utils import *
+from universal_utils import *
+from data_utils import *
 
 
 def compute_fix_snr_capacity(bpg_metrics, snr_db, cbr_list, log_dir="./logs"):

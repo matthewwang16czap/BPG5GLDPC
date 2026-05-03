@@ -2,7 +2,6 @@ from glob import glob
 import logging
 import os
 import datetime
-from PIL import Image
 import torch
 import numpy as np
 import matplotlib.pyplot as plt

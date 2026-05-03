@@ -12,7 +12,7 @@ from torchmetrics.image import (
     MultiScaleStructuralSimilarityIndexMeasure as MS_SSIM,
 )
 import lpips
-from utils import *
+from universal_utils import *
 
 
 class RandomResizedCropImageDataset(Dataset):
