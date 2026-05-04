@@ -5,50 +5,30 @@ from universal_utils import *
 from data_utils import *
 
 
-def compute_fix_snr_capacity(bpg_metrics, snr_db, cbr_list, log_dir="./logs"):
-    results = []
-    for cbr in cbr_list:
-        max_bpp = get_max_bpp(snr_db, cbr)
-        best_psnr = 0
-        best_point = {}
-        for p in bpg_metrics:
-            bpp = p["bpp"]
-            psnr = p["psnr"]
-            if bpp <= max_bpp:
-                if psnr > best_psnr:
-                    best_psnr = psnr
-                    best_point = p
-        best_point["cbr"] = cbr
-        best_point["snr"] = snr_db
-        results.append(best_point)
-    out_path = os.path.join(log_dir, f"bpg_capacity_snr_{snr_db}.json")
-    with open(out_path, "w") as fp:
-        json.dump(results, fp, indent=2)
-    print(f"bpg capacity at snr={snr_db} saved to {out_path}")
-    return results
-
-
-def compute_fix_cbr_capacity(bpg_metrics, snr_db_list, cbr, log_dir="./logs"):
-    results = []
+def capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir="./logs"):
+    capacity_results = []
     for snr_db in snr_db_list:
-        max_bpp = get_max_bpp(snr_db, cbr)
-        best_psnr = 0
-        best_point = None
-        for p in bpg_metrics:
-            bpp = p["bpp"]
-            psnr = p["psnr"]
-            if bpp <= max_bpp:
-                if psnr > best_psnr:
-                    best_psnr = psnr
-                    best_point = p
-        best_point["cbr"] = cbr
-        best_point["snr"] = snr_db
-        results.append(best_point)
-    out_path = os.path.join(log_dir, f"bpg_capacity_cbr_{cbr}.json")
+        for cbr in cbr_list:
+            max_bpp = get_max_bpp(snr_db, cbr)
+            best_psnr = 0
+            best_point = None
+            for p in bpg_metrics:
+                bpp = p["bpp"]
+                psnr = p["psnr"]
+                if bpp <= max_bpp:
+                    if psnr > best_psnr:
+                        best_psnr = psnr
+                        best_point = p
+            if best_point is None:
+                continue
+            capacity_result = {"snr": snr_db, "cbr": cbr, **best_point}
+            capacity_results.append(capacity_result)
+    capacity_results.sort(key=lambda x: (x["snr"], x["cbr"]))
+    out_path = os.path.join(log_dir, f"bpg_capacity.json")
     with open(out_path, "w") as fp:
-        json.dump(results, fp, indent=2)
-    print(f"bpg capacity at cbr={cbr} to {out_path}")
-    return results
+        json.dump(capacity_results, fp, indent=2)
+    print(f"Save bpg capacity to {out_path}")
+    return capacity_results
 
 
 if __name__ == "__main__":
@@ -59,7 +39,6 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     config = DotDict({"image_dims": (3, 256, 256), "max_test_samples": 100})
     q_list = list(range(1, 52))
-
     snr_db_list = list(range(1, 14))
     cbr_list = [x / 100.0 for x in range(1, 14, 1)]
 
@@ -90,9 +69,5 @@ if __name__ == "__main__":
             bpg_metrics = json.load(fp)
     else:
         bpg_metrics = compute_metrics(bpg_results, device=device, log_dir=log_dir)
-
-    # get capacity at fixed SNR=7
-    compute_fix_snr_capacity(bpg_metrics, 10, cbr_list, log_dir=log_dir)
-
-    # get capacity at fixed cbr=0.0
-    compute_fix_cbr_capacity(bpg_metrics, snr_db_list, 0.0625, log_dir=log_dir)
+    # Start experiment
+    capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir=log_dir)

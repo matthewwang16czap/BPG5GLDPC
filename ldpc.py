@@ -189,6 +189,7 @@ def ldpc_experiment(
                 **metrics_result,
             }
             metrics_results.append(metrics_result)
+    metrics_results.sort(key=lambda x: (x["snr"], x["cbr"]))
     metrics_results_path = os.path.join(log_dir, f"ldpc_metrics.json")
     with open(metrics_results_path, "w") as fp:
         json.dump(metrics_results, fp, indent=2)
