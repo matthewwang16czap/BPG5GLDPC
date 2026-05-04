@@ -7,6 +7,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+class DotDict(dict):
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+
 def snr_db_to_noise_var(snr_db, k, n, m):
     R = k / n
     snr = 10 ** (snr_db / 10)

@@ -57,12 +57,6 @@ if __name__ == "__main__":
     temp_dir = "./temp/"
     log_dir = "./logs/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    class DotDict(dict):
-        __getattr__ = dict.__getitem__
-        __setattr__ = dict.__setitem__
-        __delattr__ = dict.__delitem__
-
     config = DotDict({"image_dims": (3, 256, 256), "max_test_samples": 100})
     q_list = list(range(1, 52))
 

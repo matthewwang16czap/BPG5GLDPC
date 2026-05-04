@@ -114,7 +114,9 @@ def encode_bpg(image_paths, q_list, temp_dir="./temp/bpg"):
         print(f"q={q}: encoded {success_count}/{len(image_paths)} images")
 
 
-def decode_bpg(image_paths, q_list, temp_dir="./temp/bpg", file_name_postfix=""):
+def decode_bpg(
+    image_paths, q_list, temp_dir="./temp/bpg", file_name_postfix="", save_json=True
+):
     """
     For each q, decodes with bpgdec.
     Returns dict: { q -> [ {orig_path, rec_path, bpp} ] }
@@ -143,15 +145,18 @@ def decode_bpg(image_paths, q_list, temp_dir="./temp/bpg", file_name_postfix="")
                 continue
             q_results.append({"orig_path": img_path, "rec_path": rec_path, "bpp": bpp})
         results[q] = q_results
-        with open(
-            os.path.join(temp_dir, f"results{file_name_postfix}.json"), "w"
-        ) as fp:
-            json.dump(results, fp, indent=2)
+        if save_json:
+            with open(
+                os.path.join(temp_dir, f"results{file_name_postfix}.json"), "w"
+            ) as fp:
+                json.dump(results, fp, indent=2)
         print(f"q={q}: decoded {len(q_results)}/{len(image_paths)} images")
     return results
 
 
-def compute_metrics(bpg_results, device="cuda", log_dir="./logs", file_name_postfix=""):
+def compute_metrics(
+    bpg_results, device="cuda", log_dir="./logs", file_name_postfix="", save_json=True
+):
     """
     For each q, computes mean CBR, PSNR, SSIM, MS-SSIM, LPIPS.
     Saves results to JSON.
@@ -198,8 +203,10 @@ def compute_metrics(bpg_results, device="cuda", log_dir="./logs", file_name_post
         print(
             f"q={q} | BPP={all_results[-1]['bpp']:.4f} | PSNR={all_results[-1]['psnr']:.2f}"
         )
+    all_results.sort(key=lambda x: x["q"])
     out_path = os.path.join(log_dir, f"bpg_metrics{file_name_postfix}.json")
-    with open(out_path, "w") as fp:
-        json.dump(all_results, fp, indent=2)
-    print(f"bpg metrics saved to {out_path}")
+    if save_json:
+        with open(out_path, "w") as fp:
+            json.dump(all_results, fp, indent=2)
+        print(f"bpg metrics saved to {out_path}")
     return all_results

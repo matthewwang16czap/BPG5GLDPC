@@ -56,16 +56,26 @@ def find_thresholds(target_ber=1e-4, num_trials=100, device="cpu", save_dir="./l
     return thresholds
 
 
-def select_config(thresholds, snr_db):
-    """
-    Select the highest-throughput config whose threshold <= snr_db.
-    thresholds: list of dicts loaded from JSON, sorted by threshold_snr_db ascending.
-    """
-    best = None
-    for cfg in thresholds:
-        if snr_db >= cfg["threshold_snr_db"]:
-            best = cfg
-    return best  # None if snr_db is below all thresholds
+def select_q_and_config(snr_db, cbr, thresholds, bpg_metrics):
+    reliable_configs = [cfg for cfg in thresholds if snr_db >= cfg["threshold_snr_db"]]
+    if not reliable_configs:
+        return None, None
+    best_q, best_cfg = None, None
+    for cfg in reliable_configs:
+        m, k, n = cfg["m"], cfg["k"], cfg["n"]
+        R = k / n
+        max_bpp = cbr * m * R
+        candidate_q = None
+        for bpg_metric in bpg_metrics:
+            if bpg_metric["bpp"] <= max_bpp:
+                candidate_q = bpg_metric["q"]
+                break
+        if candidate_q is None:
+            continue
+        if best_q is None or candidate_q < best_q:
+            best_q = candidate_q
+            best_cfg = cfg
+    return best_q, best_cfg
 
 
 def transmit_bitstream(
@@ -97,7 +107,8 @@ def ldpc_experiment(
     thresholds,
     config,
     snr_db_list,
-    q_list,
+    cbr_list,
+    bpg_metrics,
     temp_dir="./temp/",
     log_dir="./logs/",
     device="cpu",
@@ -118,27 +129,30 @@ def ldpc_experiment(
         print(f"Temp dir {bpg_dir} already exists. Skipping BPG encoding/decoding.")
     else:
         encode_bpg(image_paths, q_list, temp_dir=bpg_dir)
+    metrics_results = []
     for snr_db in snr_db_list:
-        # Step 3: Channel transmission
-        amc_config = select_config(thresholds, snr_db)
-        if amc_config is None:
-            print(f"No suitable AMC config for SNR={snr_db} dB, skipping.")
-            continue
-        m, k, n = amc_config["m"], amc_config["k"], amc_config["n"]
-        constellation = Constellation("qam", num_bits_per_symbol=m)
-        mapper = Mapper(constellation=constellation)
-        demapper = Demapper(
-            demapping_method="app", constellation=constellation, output="llr"
-        )
-        encoder = LDPC5GEncoder(k=k, n=n, dtype=torch.float32)
-        decoder = LDPC5GDecoder(encoder, hard_out=True)
-        noise_var = snr_db_to_noise_var(snr_db, k, n, m)
-        for q in q_list:
-            q_dir_bpg = os.path.join(bpg_dir, f"q{q}", "bpg")
+        for cbr in cbr_list:
+            # Step 3: Channel transmission
+            best_q, amc_config = select_q_and_config(
+                snr_db, cbr, thresholds, bpg_metrics
+            )
+            if amc_config is None:
+                print(f"No suitable AMC config for SNR={snr_db} dB, skipping.")
+                continue
+            m, k, n = amc_config["m"], amc_config["k"], amc_config["n"]
+            constellation = Constellation("qam", num_bits_per_symbol=m)
+            mapper = Mapper(constellation=constellation)
+            demapper = Demapper(
+                demapping_method="app", constellation=constellation, output="llr"
+            )
+            encoder = LDPC5GEncoder(k=k, n=n, dtype=torch.float32)
+            decoder = LDPC5GDecoder(encoder, hard_out=True)
+            noise_var = snr_db_to_noise_var(snr_db, k, n, m)
+            q_dir_bpg = os.path.join(bpg_dir, f"q{best_q}", "bpg")
+            file_name_postfix = f"_snr{snr_db}_cbr{cbr}"
             for img_path in image_paths:
                 file_name = os.path.splitext(os.path.basename(img_path))[0]
                 bpg_path = os.path.join(q_dir_bpg, f"{file_name}.bpg")
-                file_name_postfix = f"_m{m}_k{k}_n{n}_snr{snr_db}"
                 bitstream = file_to_bitstream(bpg_path)
                 post_channel_bitstream, symbols = transmit_bitstream(
                     bitstream,
@@ -155,20 +169,30 @@ def ldpc_experiment(
                     post_channel_bitstream,
                     bpg_path.replace(f"{file_name}", f"{file_name}{file_name_postfix}"),
                 )
-        # Step 4: BPG decoding and metric computation
-        file_name_postfix = f"_m{m}_k{k}_n{n}_snr{snr_db}"
-        bpg_results = decode_bpg(
-            image_paths,
-            q_list,
-            temp_dir="./temp/bpg",
-            file_name_postfix=file_name_postfix,
-        )
-        bpg_metrics = compute_metrics(
-            bpg_results,
-            device=device,
-            log_dir=log_dir,
-            file_name_postfix=file_name_postfix,
-        )
+            # Step 4: BPG decoding and metric computation
+            bpg_results = decode_bpg(
+                image_paths,
+                [best_q],
+                temp_dir="./temp/bpg",
+                file_name_postfix=file_name_postfix,
+            )
+            metrics_result = compute_metrics(
+                bpg_results,
+                device=device,
+                log_dir=log_dir,
+                file_name_postfix=file_name_postfix,
+                save_json=False,
+            )[0]
+            metrics_result = {
+                "snr": snr_db,
+                "cbr": cbr,
+                **metrics_result,
+            }
+            metrics_results.append(metrics_result)
+    metrics_results_path = os.path.join(log_dir, f"ldpc_metrics.json")
+    with open(metrics_results_path, "w") as fp:
+        json.dump(metrics_results, fp, indent=2)
+    print(f"LDPC experiment completed. Metrics saved to {metrics_results_path}")
 
 
 # Main
@@ -185,12 +209,14 @@ if __name__ == "__main__":
     else:
         with open(os.path.join(log_dir, f"thresholds.json"), "r") as fp:
             thresholds = json.load(fp)
-
-    class DotDict(dict):
-        __getattr__ = dict.__getitem__
-        __setattr__ = dict.__setitem__
-        __delattr__ = dict.__delitem__
-
+    bpg_metrics_path = os.path.join(log_dir, f"bpg_metrics.json")
+    if os.path.exists(bpg_metrics_path):
+        with open(bpg_metrics_path, "r") as fp:
+            bpg_metrics = json.load(fp)
+    else:
+        raise FileNotFoundError(
+            f"{bpg_metrics_path} not found. Please run the capacity experiment to generate this file."
+        )
     config = DotDict({"image_dims": (3, 256, 256), "max_test_samples": 100})
     q_list = list(range(1, 52))
     snr_db_list = list(range(1, 14))
@@ -200,8 +226,9 @@ if __name__ == "__main__":
         thresholds,
         config,
         snr_db_list,
-        q_list,
-        temp_dir=temp_dir,
-        log_dir=log_dir,
-        device=device,
+        cbr_list,
+        bpg_metrics,
+        temp_dir,
+        log_dir,
+        device,
     )
