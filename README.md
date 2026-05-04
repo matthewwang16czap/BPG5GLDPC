@@ -1,5 +1,3 @@
-Sionna 2.0 has support pytorch, will build a sionna2.0 ver system soon.
-
 ## Prerequisites
 
 ### `pip`
@@ -45,6 +43,26 @@ Then rebuild:
 make clean
 make -j$(nproc)
 sudo make install
+```
+
+## Usage
+
+capacity test:
+
+```bash
+python capacity.py
+```
+
+ldpc test:
+
+```bash
+python ldpc.py
+```
+
+plot the results:
+
+```bash
+python ./plots/plot2d.py
 ```
 
 ## Related links

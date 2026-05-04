@@ -5,8 +5,8 @@ import torch
 from sionna.phy.fec.ldpc import LDPC5GEncoder, LDPC5GDecoder
 from sionna.phy.mapping import Mapper, Demapper, Constellation
 from sionna.phy.channel import AWGN
-from data_utils import *
-from universal_utils import *
+from utils.data_utils import *
+from utils.universal_utils import *
 
 # AMC configurations
 AMC_CONFIGS = [
@@ -19,7 +19,7 @@ AMC_CONFIGS = [
 ]
 
 
-def find_thresholds(target_ber=1e-5, num_trials=100, device="cpu", save_dir="./logs/"):
+def find_thresholds(target_ber=1e-6, num_trials=100, device="cpu", save_dir="./logs/"):
     thresholds = []
     channel = AWGN()
     for cfg in AMC_CONFIGS:

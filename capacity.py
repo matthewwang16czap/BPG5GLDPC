@@ -1,8 +1,9 @@
 import os
 import torch
 import json
-from universal_utils import *
-from data_utils import *
+from glob import glob
+from utils.universal_utils import get_max_bpp, DotDict
+from utils.data_utils import preprocess_dataset, encode_bpg, decode_bpg, compute_metrics
 
 
 def capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir="./logs"):
