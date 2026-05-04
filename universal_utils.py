@@ -30,7 +30,7 @@ def compute_psnr(x, y):
 
 def get_max_bpp(snr_db, cbr):
     snr = 10 ** (snr_db / 10)
-    max_bpp = np.log2(1 + snr) * cbr
+    max_bpp = 2 * np.log2(1 + snr) * cbr  # bits per complex use (2 real dims)
     return max_bpp
 
 
@@ -57,32 +57,3 @@ def setup_logger(log_dir="./logs", current_time=None):
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     return logger
-
-
-def plot_lines(x, y, z, xlabel="x", ylabel="y", zlabel="z"):
-    """
-    x: 1D array of shape (N,)
-    y: 1D array of shape (M,)
-    z: 2D array of shape (M, N)
-       each row corresponds to one y setting
-    """
-    x = np.array(x)
-    y = np.array(y)
-    z = np.array(z)
-
-    assert z.shape == (
-        len(y),
-        len(x),
-    ), f"z shape must be ({len(y)}, {len(x)}) but got {z.shape}"
-
-    plt.figure()
-
-    for i, y_val in enumerate(y):
-        plt.plot(x, z[i], label=f"{ylabel} = {y_val}")
-
-    plt.xlabel(xlabel)
-    plt.ylabel(zlabel)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()

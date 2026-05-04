@@ -19,7 +19,7 @@ AMC_CONFIGS = [
 ]
 
 
-def find_thresholds(target_ber=1e-4, num_trials=100, device="cpu", save_dir="./logs/"):
+def find_thresholds(target_ber=1e-5, num_trials=100, device="cpu", save_dir="./logs/"):
     thresholds = []
     channel = AWGN()
     for cfg in AMC_CONFIGS:
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     # Run this function to find the SNR thresholds for each AMC config at the target BER of 1e-4.
     # This will help determine AMC config for different SNRs in the main experiment.
     if not os.path.exists(os.path.join(log_dir, f"thresholds.json")):
-        thresholds = find_thresholds(target_ber=1e-4, num_trials=100, device=device)
+        thresholds = find_thresholds(target_ber=1e-6, num_trials=100, device=device)
     else:
         with open(os.path.join(log_dir, f"thresholds.json"), "r") as fp:
             thresholds = json.load(fp)
