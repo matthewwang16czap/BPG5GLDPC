@@ -1,3 +1,7 @@
+# BPG Image Compression over AWGN Channels: LDPC vs. Capacity Bound Evaluation
+
+This work evaluates the end-to-end image reconstruction quality of BPG-compressed images transmitted over an AWGN channel, benchmarking a practical LDPC-coded system against the theoretical channel capacity limit across varying SNR and channel bandwidth ratio operating points, using PSNR, MS-SSIM, and LPIPS as perceptual quality metrics on the Kodak dataset, as well as Sionna library for implementing channel simulation and LDPC-coded system.
+
 ## Prerequisites
 
 ### `pip`
