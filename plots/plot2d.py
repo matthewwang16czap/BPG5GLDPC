@@ -1,15 +1,19 @@
 import json
 import os
+import sys
+from collections import defaultdict
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from collections import defaultdict
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
 axis_names = {
     "psnr": "PSNR (dB)",
     "msssim": "MS-SSIM (dB)",
     "lpips": "LPIPS Score",
     "snr": "SNR (dB)",
-    "cbr": "channel bandwidth ratio",
+    "cbr": "Channel Bandwidth Ratio",
 }
 
 cond_formatters = {
@@ -29,93 +33,114 @@ def plot_2d(
 ):
     """
     Args:
-        metrics_sources: a single path string, or a list of (path, label, linestyle) tuples
-                         e.g. [("ldpc_metrics.json", "BPG + LDPC", "-"),
-                               ("bpg_capacity.json", "BPG + Capacity", "--")]
-        cond_list:       list of condition values to plot
-        cond_name:       the condition dimension (e.g. "snr")
-        x_axis:          metric key for the x-axis
-        y_axis:          metric key for the y-axis
-        save_path:       if given, saves the figure here
+        metrics_sources: list of dicts
+
+        Example:
+        metrics_sources = [
+            {
+                "path": "ldpc_metrics.json",
+                "label": "BPG + LDPC",
+                "linestyle": "-",
+                "marker": "o",
+            },
+            {
+                "path": "bpg_capacity.json",
+                "label": "BPG Capacity",
+                "linestyle": "--",
+                "marker": "s",
+            },
+        ]
     """
-    # Normalize input
+
+    # Backward compatibility for single file
     if isinstance(metrics_sources, str):
-        metrics_sources = [(metrics_sources, None, "--")]
-    else:
-        normalized = []
-        for t in metrics_sources:
-            if len(t) == 3:
-                normalized.append((t[0], t[1], t[2]))
-            else:
-                normalized.append((t[0], t[1], "--"))
-        metrics_sources = normalized
+        metrics_sources = [
+            {
+                "path": metrics_sources,
+                "label": None,
+                "linestyle": "--",
+                "marker": "o",
+            }
+        ]
     cond_labels = [cond_formatters[cond_name](v) for v in cond_list]
-    markers = ["v", "o", "*", "s", "^", "D"]
-    source_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    # Colors distinguish conditions
+    cond_colors = plt.cm.tab10(range(len(cond_list)))
     fig, ax = plt.subplots(figsize=(6, 5))
-    for src_idx, (metrics_path, src_label, linestyle) in enumerate(metrics_sources):
-        color = source_colors[src_idx % len(source_colors)]
-        with open(metrics_path) as f:
+    for source in metrics_sources:
+        metrics_path = source["path"]
+        src_label = source.get("label", "")
+        linestyle = source.get("linestyle", "-")
+        marker = source.get("marker", "o")
+        with open(metrics_path, "r") as f:
             metrics = json.load(f)
         metrics_by_cond = defaultdict(list)
         for m in metrics:
             metrics_by_cond[m[cond_name]].append(m)
         for i, cond_val in enumerate(sorted(cond_list)):
-            data = sorted(metrics_by_cond[cond_val], key=lambda x: x[x_axis])
+            if cond_val not in metrics_by_cond:
+                continue
+            data = sorted(
+                metrics_by_cond[cond_val],
+                key=lambda x: x[x_axis],
+            )
             x_data = [d[x_axis] for d in data]
             y_data = [d[y_axis] for d in data]
             ax.plot(
                 x_data,
                 y_data,
+                color=cond_colors[i],
                 linestyle=linestyle,
-                marker=markers[i % len(markers)],
-                color=color,
-                label="_nolegend_",  # suppress default legend
+                marker=marker,
                 markersize=6,
+                label="_nolegend_",
             )
-    # Legend 1: markers conditions
-    marker_handles = [
+    # Legend 1: Conditions (colors)
+    cond_handles = [
         Line2D(
             [0],
             [0],
-            marker=markers[i % len(markers)],
-            color="black",  # neutral color for marker legend
-            linestyle="--",
-            markersize=6,
+            color=cond_colors[i],
+            linestyle="-",
+            linewidth=2,
             label=cond_labels[i],
         )
         for i in range(len(cond_list))
     ]
     legend1 = ax.legend(
-        handles=marker_handles,
+        handles=cond_handles,
         loc="upper left",
         fontsize=9,
+        title="Conditions",
     )
-    ax.add_artist(legend1)  # keep it when adding the second legend
-    # Legend 2: colors sources
-    color_handles = [
+    ax.add_artist(legend1)
+    # Legend 2: Sources (markers + styles)
+    source_handles = [
         Line2D(
             [0],
             [0],
-            color=source_colors[j % len(source_colors)],
-            linestyle=metrics_sources[j][2],
+            color="black",
+            linestyle=source.get("linestyle", "-"),
+            marker=source.get("marker", "o"),
             linewidth=2,
-            label=metrics_sources[j][1],
+            markersize=6,
+            label=source.get("label", ""),
         )
-        for j in range(len(metrics_sources))
+        for source in metrics_sources
     ]
     ax.legend(
-        handles=color_handles,
+        handles=source_handles,
         loc="lower right",
         fontsize=9,
+        title="Methods",
     )
-    ax.set_xlabel(axis_names[x_axis])
-    ax.set_ylabel(axis_names[y_axis])
+    # labels and grid
+    ax.set_xlabel(axis_names.get(x_axis, x_axis))
+    ax.set_ylabel(axis_names.get(y_axis, y_axis))
     ax.set_title(title)
     ax.grid(True, linestyle="--", alpha=0.4)
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=150)
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.show()
 
 
@@ -124,16 +149,54 @@ if __name__ == "__main__":
     save_dir = "./figs/"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(save_dir, exist_ok=True)
-
+    # Define marker choices here
+    AVAILABLE_MARKERS = [
+        "o",
+        "s",
+        "^",
+        "D",
+        "v",
+        "*",
+        "P",
+        "X",
+        "h",
+        "H",
+        "8",
+        "p",
+        "x",
+        "+",
+    ]
+    fig_configs = {
+        "cond_name": "snr",
+        "cond_list": [1, 4, 7, 10, 13],
+        "x_axis": "cbr",
+        "y_axis": "psnr",
+        "channel": "AWGN",
+        "dataset": "Kodak",
+        "img_size": "256",
+    }
     plot_2d(
         metrics_sources=[
-            (os.path.join(log_dir, "ldpc_metrics.json"), "BPG + LDPC", "-"),
-            (os.path.join(log_dir, "bpg_capacity.json"), "BPG Capacity", "--"),
+            {
+                "path": os.path.join(log_dir, "ldpc.json"),
+                "label": "BPG + LDPC",
+                "linestyle": "-",
+                "marker": AVAILABLE_MARKERS[0],
+            },
+            {
+                "path": os.path.join(log_dir, "capacity.json"),
+                "label": "BPG Capacity",
+                "linestyle": "--",
+                "marker": AVAILABLE_MARKERS[1],
+            },
         ],
-        cond_list=[1, 4, 7, 10, 13],
-        cond_name="snr",
-        x_axis="cbr",
-        y_axis="psnr",
-        title="Kodak dataset, AWGN channel",
-        save_path=os.path.join(save_dir, "kodak_psnr_cbr.png"),
+        cond_list=fig_configs["cond_list"],
+        cond_name=fig_configs["cond_name"],
+        x_axis=fig_configs["x_axis"],
+        y_axis=fig_configs["y_axis"],
+        title=f"{fig_configs['img_size']}x{fig_configs['img_size']} {fig_configs['dataset']} Dataset, {fig_configs['channel']} Channel",
+        save_path=os.path.join(
+            save_dir,
+            f"{fig_configs['dataset']}_{fig_configs['img_size']}_{fig_configs['channel']}_{fig_configs['x_axis']}_{fig_configs['y_axis']}_2d.png",
+        ),
     )
