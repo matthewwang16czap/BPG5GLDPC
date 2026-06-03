@@ -111,6 +111,7 @@ def ldpc_experiment(
     bpg_metrics,
     temp_dir="./temp/",
     log_dir="./logs/",
+    dataset_name="Kodak",
     device="cpu",
 ):
     channel = AWGN()
@@ -190,7 +191,7 @@ def ldpc_experiment(
             }
             metrics_results.append(metrics_result)
     metrics_results.sort(key=lambda x: (x["snr"], x["cbr"]))
-    metrics_results_path = os.path.join(log_dir, f"ldpc_metrics.json")
+    metrics_results_path = os.path.join(log_dir, f"ldpc_{dataset_name}.json")
     with open(metrics_results_path, "w") as fp:
         json.dump(metrics_results, fp, indent=2)
     print(f"LDPC experiment completed. Metrics saved to {metrics_results_path}")
@@ -199,14 +200,19 @@ def ldpc_experiment(
 # Main
 if __name__ == "__main__":
     homedir = "/home/matthewwang16czap/"
-    data_dirs = [os.path.join(homedir, "datasets/Kodak/")]
+    dataset_name = "CLIC"
+    data_dirs_config = {
+        "Kodak": [os.path.join(homedir, f"datasets/{dataset_name}/")],
+        "CLIC": [os.path.join(homedir, f"datasets/{dataset_name}/test/")],
+    }
+    data_dirs = data_dirs_config.get(dataset_name)
     temp_dir = "./temp/"
     log_dir = "./logs/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # Run this function to find the SNR thresholds for each AMC config at the target BER of 1e-4.
     # This will help determine AMC config for different SNRs in the main experiment.
     if not os.path.exists(os.path.join(log_dir, f"thresholds.json")):
-        thresholds = find_thresholds(target_ber=1e-6, num_trials=100, device=device)
+        thresholds = find_thresholds(target_ber=1e-6, num_trials=500, device=device)
     else:
         with open(os.path.join(log_dir, f"thresholds.json"), "r") as fp:
             thresholds = json.load(fp)
@@ -231,5 +237,6 @@ if __name__ == "__main__":
         bpg_metrics,
         temp_dir,
         log_dir,
+        dataset_name,
         device,
     )

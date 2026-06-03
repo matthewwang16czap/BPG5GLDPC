@@ -6,7 +6,9 @@ from utils.universal_utils import get_max_bpp, DotDict
 from utils.data_utils import preprocess_dataset, encode_bpg, decode_bpg, compute_metrics
 
 
-def capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir="./logs"):
+def capacity_experiment(
+    bpg_metrics, snr_db_list, cbr_list, log_dir="./logs", dataset_name="Kodak"
+):
     capacity_results = []
     for snr_db in snr_db_list:
         for cbr in cbr_list:
@@ -25,7 +27,7 @@ def capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir="./logs"):
             capacity_result = {"snr": snr_db, "cbr": cbr, **best_point}
             capacity_results.append(capacity_result)
     capacity_results.sort(key=lambda x: (x["snr"], x["cbr"]))
-    out_path = os.path.join(log_dir, f"bpg_capacity.json")
+    out_path = os.path.join(log_dir, f"capacity_{dataset_name}.json")
     with open(out_path, "w") as fp:
         json.dump(capacity_results, fp, indent=2)
     print(f"Save bpg capacity to {out_path}")
@@ -34,7 +36,12 @@ def capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir="./logs"):
 
 if __name__ == "__main__":
     homedir = "/home/matthewwang16czap/"
-    data_dirs = [os.path.join(homedir, "datasets/Kodak/")]
+    dataset_name = "CLIC"
+    data_dirs_config = {
+        "Kodak": [os.path.join(homedir, f"datasets/{dataset_name}/")],
+        "CLIC": [os.path.join(homedir, f"datasets/{dataset_name}/test/")],
+    }
+    data_dirs = data_dirs_config.get(dataset_name)
     temp_dir = "./temp/"
     log_dir = "./logs/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -64,11 +71,13 @@ if __name__ == "__main__":
         encode_bpg(image_paths, q_list, temp_dir=bpg_dir)
         bpg_results = decode_bpg(image_paths, q_list, temp_dir=bpg_dir)
     # Step 3
-    metrics_dir = os.path.join(log_dir, "bpg_metrics.json")
+    metrics_dir = os.path.join(log_dir, f"bpg_metrics_{dataset_name}.json")
     if os.path.exists(metrics_dir):
         with open(metrics_dir, "r") as fp:
             bpg_metrics = json.load(fp)
     else:
         bpg_metrics = compute_metrics(bpg_results, device=device, log_dir=log_dir)
     # Start experiment
-    capacity_experiment(bpg_metrics, snr_db_list, cbr_list, log_dir=log_dir)
+    capacity_experiment(
+        bpg_metrics, snr_db_list, cbr_list, log_dir=log_dir, dataset_name=dataset_name
+    )
