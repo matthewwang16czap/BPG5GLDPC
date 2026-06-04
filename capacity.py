@@ -36,7 +36,7 @@ def capacity_experiment(
 
 if __name__ == "__main__":
     homedir = "/home/matthewwang16czap/"
-    dataset_name = "CLIC"
+    dataset_name = "Kodak"
     data_dirs_config = {
         "Kodak": [os.path.join(homedir, f"datasets/{dataset_name}/")],
         "CLIC": [os.path.join(homedir, f"datasets/{dataset_name}/test/")],
@@ -76,7 +76,7 @@ if __name__ == "__main__":
         with open(metrics_dir, "r") as fp:
             bpg_metrics = json.load(fp)
     else:
-        bpg_metrics = compute_metrics(bpg_results, device=device, log_dir=log_dir)
+        bpg_metrics = compute_metrics(bpg_results, device=device, log_dir=log_dir, file_name_postfix=f"_{dataset_name}")
     # Start experiment
     capacity_experiment(
         bpg_metrics, snr_db_list, cbr_list, log_dir=log_dir, dataset_name=dataset_name

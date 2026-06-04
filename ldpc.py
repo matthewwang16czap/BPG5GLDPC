@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from sionna.phy.fec.ldpc import LDPC5GEncoder, LDPC5GDecoder
 from sionna.phy.mapping import Mapper, Demapper, Constellation
-from sionna.phy.channel import AWGN
+from utils.channel_utils import build_channel
 from utils.data_utils import *
 from utils.universal_utils import *
 
@@ -19,9 +19,9 @@ AMC_CONFIGS = [
 ]
 
 
-def find_thresholds(target_ber=1e-6, num_trials=100, device="cpu", save_dir="./logs/"):
+def find_thresholds(target_ber=1e-6, num_trials=100, channel_type="awgn", device="cpu", save_dir="./logs/"):
     thresholds = []
-    channel = AWGN()
+    channel = build_channel(channel_type, device=device)
     for cfg in AMC_CONFIGS:
         m, k, n = cfg["m"], cfg["k"], cfg["n"]
         encoder = LDPC5GEncoder(k=k, n=n)
@@ -38,8 +38,8 @@ def find_thresholds(target_ber=1e-6, num_trials=100, device="cpu", save_dir="./l
                 bits = torch.randint(0, 2, (1, k), dtype=torch.float32, device=device)
                 coded = encoder(bits)
                 symbols = mapper(coded)
-                rx = channel(symbols, noise_var)
-                llr = demapper(rx, noise_var / 2)
+                rx, llr_nvar = channel(symbols, noise_var) 
+                llr     = demapper(rx, llr_nvar)
                 decoded = decoder(llr)
                 bers.append(torch.mean(torch.abs(decoded - bits)).item())
             avg_ber = np.mean(bers)
@@ -50,9 +50,9 @@ def find_thresholds(target_ber=1e-6, num_trials=100, device="cpu", save_dir="./l
                 break
     thresholds.sort(key=lambda x: x["threshold_snr_db"])
     os.makedirs(save_dir, exist_ok=True)
-    with open(os.path.join(save_dir, f"thresholds.json"), "w") as fp:
+    with open(os.path.join(save_dir, f"thresholds_{channel_type}.json"), "w") as fp:
         json.dump(thresholds, fp, indent=2)
-    print(f"Thresholds saved to {os.path.join(save_dir, f'thresholds.json')}")
+    print(f"Thresholds saved to {os.path.join(save_dir, f'thresholds_{channel_type}.json')}")
     return thresholds
 
 
@@ -93,8 +93,8 @@ def transmit_bitstream(
     ).reshape(num_blocks, k)
     coded = encoder(bits)
     symbols = mapper(coded)
-    rx = channel(symbols, noise_var)
-    llr = demapper(rx, noise_var / 2)
+    rx, llr_nvar = channel(symbols, noise_var)
+    llr = demapper(rx, llr_nvar)
     decoded = decoder(llr)
     decoded = decoded.cpu().numpy().astype(np.int8).reshape(-1)
     # Strip padding to recover original length
@@ -112,9 +112,10 @@ def ldpc_experiment(
     temp_dir="./temp/",
     log_dir="./logs/",
     dataset_name="Kodak",
+    channel_type="awgn",
     device="cpu",
 ):
-    channel = AWGN()
+    channel = build_channel(channel_type, device=device)
     # Step 1: Preprocess dataset
     img_dir = os.path.join(temp_dir, "images")
     if os.path.exists(img_dir):
@@ -191,7 +192,7 @@ def ldpc_experiment(
             }
             metrics_results.append(metrics_result)
     metrics_results.sort(key=lambda x: (x["snr"], x["cbr"]))
-    metrics_results_path = os.path.join(log_dir, f"ldpc_{dataset_name}.json")
+    metrics_results_path = os.path.join(log_dir, f"ldpc_{dataset_name}_{channel_type}.json")
     with open(metrics_results_path, "w") as fp:
         json.dump(metrics_results, fp, indent=2)
     print(f"LDPC experiment completed. Metrics saved to {metrics_results_path}")
@@ -208,15 +209,16 @@ if __name__ == "__main__":
     data_dirs = data_dirs_config.get(dataset_name)
     temp_dir = "./temp/"
     log_dir = "./logs/"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
     # Run this function to find the SNR thresholds for each AMC config at the target BER of 1e-4.
     # This will help determine AMC config for different SNRs in the main experiment.
-    if not os.path.exists(os.path.join(log_dir, f"thresholds.json")):
-        thresholds = find_thresholds(target_ber=1e-6, num_trials=500, device=device)
+    channel_type = "rayleigh"
+    if not os.path.exists(os.path.join(log_dir, f"thresholds_{channel_type}.json")):
+        thresholds = find_thresholds(target_ber=1e-6, num_trials=100, channel_type=channel_type, device=device)
     else:
-        with open(os.path.join(log_dir, f"thresholds.json"), "r") as fp:
+        with open(os.path.join(log_dir, f"thresholds_{channel_type}.json"), "r") as fp:
             thresholds = json.load(fp)
-    bpg_metrics_path = os.path.join(log_dir, f"bpg_metrics.json")
+    bpg_metrics_path = os.path.join(log_dir, f"bpg_metrics_{dataset_name}.json")
     if os.path.exists(bpg_metrics_path):
         with open(bpg_metrics_path, "r") as fp:
             bpg_metrics = json.load(fp)
@@ -238,5 +240,6 @@ if __name__ == "__main__":
         temp_dir,
         log_dir,
         dataset_name,
+        channel_type,
         device,
     )

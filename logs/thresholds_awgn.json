@@ -24,7 +24,7 @@
     "m": 4,
     "k": 4096,
     "n": 6144,
-    "threshold_snr_db": 5.5,
+    "threshold_snr_db": 6.0,
     "ber": 0.0
   },
   {
@@ -32,7 +32,7 @@
     "k": 4096,
     "n": 6144,
     "threshold_snr_db": 9.0,
-    "ber": 0.0
+    "ber": 9.765625e-07
   },
   {
     "m": 6,
